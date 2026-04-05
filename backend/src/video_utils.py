@@ -1,6 +1,6 @@
 """
 Utility functions for video-related operations.
-Optimized for MoviePy v2, AssemblyAI integration, and high-quality output.
+Optimized for MoviePy v2, local Whisper transcription, and high-quality output.
 """
 
 from pathlib import Path
@@ -15,7 +15,7 @@ import cv2
 from moviepy import VideoFileClip, CompositeVideoClip, TextClip, ColorClip
 from moviepy.video.fx import CrossFadeIn, CrossFadeOut, FadeIn, FadeOut
 
-import assemblyai as aai
+import whisper
 import srt
 from datetime import timedelta
 
@@ -25,7 +25,19 @@ from .font_registry import find_font_path
 
 logger = logging.getLogger(__name__)
 config = Config()
-TRANSCRIPT_CACHE_SCHEMA_VERSION = 2
+TRANSCRIPT_CACHE_SCHEMA_VERSION = 3
+
+_whisper_model = None
+
+def _get_whisper_model():
+    """Lazy-load Whisper model (heavy on first call, cached after)."""
+    global _whisper_model
+    if _whisper_model is None:
+        model_size = config.whisper_model or "base"
+        logger.info(f"Loading Whisper model: {model_size}")
+        _whisper_model = whisper.load_model(model_size)
+        logger.info(f"Whisper model '{model_size}' loaded")
+    return _whisper_model
 
 
 class VideoProcessor:
@@ -82,44 +94,86 @@ class VideoProcessor:
         return settings.get(target_quality, settings["high"])
 
 
+class _WhisperWord:
+    """Shim that matches the attribute interface of AssemblyAI words."""
+    __slots__ = ("text", "start", "end", "confidence", "speaker")
+
+    def __init__(self, text: str, start: int, end: int, confidence: float = 0.95, speaker: str | None = None):
+        self.text = text
+        self.start = start  # milliseconds
+        self.end = end      # milliseconds
+        self.confidence = confidence
+        self.speaker = speaker
+
+
+class _WhisperUtterance:
+    """Shim that matches the attribute interface of AssemblyAI utterances."""
+    __slots__ = ("text", "start", "end", "speaker", "words")
+
+    def __init__(self, text: str, start: int, end: int, words: list, speaker: str | None = None):
+        self.text = text
+        self.start = start
+        self.end = end
+        self.speaker = speaker
+        self.words = words
+
+
+class _WhisperTranscript:
+    """Adapter that presents Whisper output in the same interface the codebase expects."""
+
+    def __init__(self, result: dict):
+        self.text = result.get("text", "").strip()
+        self.words: list[_WhisperWord] = []
+        self.utterances: list[_WhisperUtterance] = []
+
+        for seg in result.get("segments", []):
+            seg_words: list[_WhisperWord] = []
+            for w in seg.get("words", []):
+                word_obj = _WhisperWord(
+                    text=w["word"].strip(),
+                    start=int(w["start"] * 1000),
+                    end=int(w["end"] * 1000),
+                    confidence=w.get("probability", 0.95),
+                )
+                seg_words.append(word_obj)
+                self.words.append(word_obj)
+
+            self.utterances.append(_WhisperUtterance(
+                text=seg.get("text", "").strip(),
+                start=int(seg["start"] * 1000),
+                end=int(seg["end"] * 1000),
+                words=seg_words,
+            ))
+
+
 def get_video_transcript(video_path: Path, speech_model: str = "best") -> str:
-    """Get transcript using AssemblyAI with word-level timing for precise subtitles."""
+    """Get transcript using local Whisper with word-level timing for precise subtitles."""
     logger.info(f"Getting transcript for: {video_path}")
 
-    # Configure AssemblyAI
-    aai.settings.api_key = config.assembly_ai_api_key
-    transcriber = aai.Transcriber()
-
-    # Request word-level timestamps for precise subtitle sync
-    speech_model_value = aai.SpeechModel.best
-    if speech_model == "nano":
-        speech_model_value = aai.SpeechModel.nano
-
-    config_obj = aai.TranscriptionConfig(
-        speaker_labels=True,
-        punctuate=True,
-        format_text=True,
-        speech_model=speech_model_value,
-    )
-
     try:
-        logger.info("Starting AssemblyAI transcription")
-        transcript = transcriber.transcribe(str(video_path), config=config_obj)
+        model = _get_whisper_model()
 
-        if transcript.status == aai.TranscriptStatus.error:
-            logger.error(f"AssemblyAI transcription failed: {transcript.error}")
-            raise Exception(f"Transcription failed: {transcript.error}")
+        logger.info("Starting local Whisper transcription")
+        result = model.transcribe(
+            str(video_path),
+            word_timestamps=True,
+            verbose=False,
+        )
+
+        transcript = _WhisperTranscript(result)
+
+        if not transcript.text:
+            logger.error("Whisper returned empty transcription")
+            raise Exception("Transcription returned no text")
 
         formatted_lines = format_transcript_for_analysis(transcript)
-
-        # Cache the raw transcript for subtitle generation
         cache_transcript_data(video_path, transcript)
 
-        result = "\n".join(formatted_lines)
+        output = "\n".join(formatted_lines)
         logger.info(
-            f"Transcript formatted: {len(formatted_lines)} segments, {len(result)} chars"
+            f"Transcript formatted: {len(formatted_lines)} segments, {len(output)} chars"
         )
-        return result
+        return output
 
     except Exception as e:
         logger.error(f"Error in transcription: {e}")
@@ -127,7 +181,7 @@ def get_video_transcript(video_path: Path, speech_model: str = "best") -> str:
 
 
 def cache_transcript_data(video_path: Path, transcript) -> None:
-    """Cache AssemblyAI transcript data for subtitle generation."""
+    """Cache transcript word-level data for subtitle generation."""
     cache_path = video_path.with_suffix(".transcript_cache.json")
 
     words_data = []
@@ -164,7 +218,7 @@ def cache_transcript_data(video_path: Path, transcript) -> None:
 
 
 def load_cached_transcript_data(video_path: Path) -> Optional[Dict]:
-    """Load cached AssemblyAI transcript data."""
+    """Load cached transcript data (word-level timing)."""
     cache_path = video_path.with_suffix(".transcript_cache.json")
 
     if not cache_path.exists():
@@ -712,7 +766,7 @@ def create_assemblyai_subtitles(
     font_color: str = "#FFFFFF",
     caption_template: str = "default",
 ) -> List[TextClip]:
-    """Create subtitles using AssemblyAI's precise word timing with template support."""
+    """Create subtitles using precise word-level timing with template support."""
     transcript_data = load_cached_transcript_data(video_path)
 
     if not transcript_data or not transcript_data.get("words"):
@@ -1519,7 +1573,7 @@ def create_clips_with_transitions(
 
 # Backward compatibility functions
 def get_video_transcript_with_assemblyai(path: Path) -> str:
-    """Backward compatibility wrapper."""
+    """Backward compatibility wrapper (now uses local Whisper)."""
     return get_video_transcript(path)
 
 

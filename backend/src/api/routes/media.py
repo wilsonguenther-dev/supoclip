@@ -228,6 +228,7 @@ async def upload_video(request: Request):
     """Upload a video to the server."""
     try:
         _get_authenticated_user_id(request)
+        config = Config()
 
         # Get the form data
         form_data = await request.form()

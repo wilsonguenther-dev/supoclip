@@ -30,6 +30,10 @@ RUN uv venv .venv && uv sync
 RUN uv pip install --upgrade --force-reinstall yt-dlp
 RUN uv pip install --upgrade --force-reinstall "yt-dlp[default]"
 
+# Pre-download Whisper model during build so first request is fast
+ARG WHISPER_MODEL_SIZE=base
+RUN .venv/bin/python -c "import whisper; whisper.load_model('${WHISPER_MODEL_SIZE}')"
+
 # Copy source code
 COPY src/ ./src/
 

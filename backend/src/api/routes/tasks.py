@@ -654,6 +654,7 @@ async def export_clip(
                 detail=f"Invalid preset. Use one of: {', '.join(EXPORT_PRESETS.keys())}",
             )
 
+        config = get_config()
         task_service = TaskService(db)
         await _require_task_owner(request, task_service, db, task_id)
         clip = await task_service.clip_repo.get_clip_by_id(db, clip_id)

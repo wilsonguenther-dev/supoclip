@@ -90,7 +90,7 @@ class VideoService:
         video_path: Path, processing_mode: str = "balanced"
     ) -> str:
         """
-        Generate transcript from video using AssemblyAI.
+        Generate transcript from video using local Whisper.
         Runs in thread pool to avoid blocking.
         """
         logger.info(f"Generating transcript for: {video_path}")

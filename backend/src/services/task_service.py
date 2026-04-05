@@ -137,6 +137,7 @@ class TaskService:
         progress_callback: Optional[Callable] = None,
         should_cancel: Optional[Callable] = None,
         clip_ready_callback: Optional[Callable] = None,
+        cleanup_settings: Optional[Dict] = None,
     ) -> Dict[str, Any]:
         """
         Process a task: download video, analyze, create clips.
