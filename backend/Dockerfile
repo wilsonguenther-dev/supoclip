@@ -20,13 +20,12 @@ RUN pip install uv
 WORKDIR /app
 
 # Copy pyproject.toml and uv.lock for dependency installation
-COPY pyproject.toml uv.lock* ./
+COPY backend/pyproject.toml backend/uv.lock* ./
 
 # Create virtual environment and install dependencies using uv sync
 RUN uv venv .venv && uv sync
 
 # Force update yt-dlp to the absolute latest version to handle YouTube API changes
-# Also install from git to get the very latest commits
 RUN uv pip install --upgrade --force-reinstall yt-dlp
 RUN uv pip install --upgrade --force-reinstall "yt-dlp[default]"
 
@@ -35,11 +34,11 @@ ARG WHISPER_MODEL_SIZE=base
 RUN .venv/bin/python -c "import whisper; whisper.load_model('${WHISPER_MODEL_SIZE}')"
 
 # Copy source code
-COPY src/ ./src/
+COPY backend/src/ ./src/
 
 # Copy fonts and transitions directories
-COPY fonts/ ./fonts/
-COPY transitions/ ./transitions/
+COPY backend/fonts/ ./fonts/
+COPY backend/transitions/ ./transitions/
 
 # Create necessary directories for video processing
 RUN mkdir -p /app/uploads /app/clips /app/logs /tmp
