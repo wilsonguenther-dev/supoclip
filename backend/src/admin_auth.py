@@ -1,11 +1,28 @@
 from __future__ import annotations
 
+from typing import Optional
+
 from fastapi import HTTPException, Request
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .auth_headers import USER_ID_HEADER, get_signed_user_id
-from .config import Config
+from .config import Config, get_config
+
+
+def get_optional_auth_user_id(request: Request) -> Optional[str]:
+    """Extract user ID from request headers without requiring auth.
+
+    Returns None if no user ID is present (allows anonymous batch submissions
+    when self-hosting).
+    """
+    config = get_config()
+    if config.monetization_enabled:
+        try:
+            return get_signed_user_id(request, config)
+        except HTTPException:
+            return None
+    return request.headers.get("user_id") or request.headers.get(USER_ID_HEADER) or None
 
 
 async def require_admin_user(

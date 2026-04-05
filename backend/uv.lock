@@ -235,21 +235,6 @@ wheels = [
 ]
 
 [[package]]
-name = "assemblyai"
-version = "0.42.0"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "httpx" },
-    { name = "pydantic" },
-    { name = "typing-extensions" },
-    { name = "websockets" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/35/e8/e1947433beb862a1a976e688fdb63d8a731aad6fef7c2771c465c4fc9f54/assemblyai-0.42.0.tar.gz", hash = "sha256:5c48f27d4982e69081b2de0f6b6c20262680e3602ad1fcd09c9eb38275c00923", size = 53550, upload-time = "2025-07-03T16:47:08.443Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/a8/31/00c86528de0b7a2fb3d0d78ae73611b3a98bcd9ea8521cdac9f6e2bfe124/assemblyai-0.42.0-py3-none-any.whl", hash = "sha256:1471065d855778df80489d7322ff928d2db9808b0b5cbc0e4c17a83f66e2f8c6", size = 49585, upload-time = "2025-07-03T16:47:07.107Z" },
-]
-
-[[package]]
 name = "async-timeout"
 version = "5.0.1"
 source = { registry = "https://pypi.org/simple" }
@@ -3309,7 +3294,6 @@ dependencies = [
     { name = "alembic" },
     { name = "apify-client" },
     { name = "arq" },
-    { name = "assemblyai" },
     { name = "asyncpg" },
     { name = "fastapi" },
     { name = "greenlet" },
@@ -3328,6 +3312,7 @@ dependencies = [
     { name = "srt" },
     { name = "srt-equalizer" },
     { name = "sse-starlette" },
+    { name = "torch" },
     { name = "uvicorn" },
     { name = "whisper" },
     { name = "yt-dlp" },
@@ -3347,7 +3332,6 @@ requires-dist = [
     { name = "alembic", specifier = ">=1.13.0" },
     { name = "apify-client", specifier = ">=1.8.1" },
     { name = "arq", specifier = ">=0.26.0" },
-    { name = "assemblyai", specifier = ">=0.35.0" },
     { name = "asyncpg", specifier = ">=0.29.0" },
     { name = "fastapi", specifier = ">=0.110.0" },
     { name = "greenlet", specifier = ">=2.0.0" },
@@ -3366,6 +3350,7 @@ requires-dist = [
     { name = "srt", specifier = ">=3.5.3" },
     { name = "srt-equalizer", specifier = ">=0.1.10" },
     { name = "sse-starlette", specifier = ">=1.6.5" },
+    { name = "torch", specifier = ">=2.0.0" },
     { name = "uvicorn", specifier = ">=0.27.0" },
     { name = "whisper", specifier = ">=1.1.10" },
     { name = "yt-dlp", specifier = ">=2025.7.21" },

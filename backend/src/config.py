@@ -75,6 +75,20 @@ class Config:
             "FAST_MODE_TRANSCRIPT_MODEL", "nano"
         )
 
+        # ClipForge upgrades
+        self.max_concurrent_renders = int(os.getenv("MAX_CONCURRENT_RENDERS", "3"))
+        self.max_concurrent_exports = int(os.getenv("MAX_CONCURRENT_EXPORTS", "4"))
+        self.batch_max_concurrent = int(os.getenv("BATCH_MAX_CONCURRENT", "5"))
+        self.hw_accel = os.getenv("HW_ACCEL", "auto")
+        self.intro_bumper_path = self._get_optional_env("INTRO_BUMPER_PATH")
+        self.outro_bumper_path = self._get_optional_env("OUTRO_BUMPER_PATH")
+        self.clip_auto_delete_days = int(os.getenv("CLIP_AUTO_DELETE_DAYS", "30"))
+        self.enable_vision_analysis = self._get_bool_env("ENABLE_VISION_ANALYSIS", False)
+        self.enable_distribution_meta = self._get_bool_env("ENABLE_DISTRIBUTION_META", True)
+        self.enable_audio_enhance = self._get_bool_env("ENABLE_AUDIO_ENHANCE", True)
+        self.default_color_grade = os.getenv("DEFAULT_COLOR_GRADE", "none")
+        self.target_lufs = float(os.getenv("TARGET_LUFS", "-14.0"))
+
     @staticmethod
     def _get_optional_env(name: str):
         value = os.getenv(name)
