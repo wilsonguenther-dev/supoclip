@@ -259,6 +259,9 @@ class TaskService:
                 if clip_info is None:
                     continue  # Skip failed clip
 
+                # Post-production: audio enhance + color grade (if enabled in config)
+                clip_info = await VideoService.post_process_clip(clip_info)
+
                 # Save to DB immediately
                 clip_id = await self.clip_repo.create_clip(
                     self.db,

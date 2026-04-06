@@ -7,14 +7,32 @@ from typing import List, Dict, Any, Optional, Literal
 import asyncio
 import logging
 import re
+import time
 
 from pydantic_ai import Agent
 from pydantic import BaseModel, Field
 
 from .config import Config
+from .intelligence.h2e_router import (
+    classify_video_intent,
+    get_scoring_weights,
+    adjust_prompt_for_intent,
+    get_clip_count_adjustment,
+)
+from .intelligence.ucb1_router import UCB1ModelRouter
 
 logger = logging.getLogger(__name__)
 config = Config()
+
+# Module-level UCB1 router (no Redis in default mode — falls back to in-process stats)
+_ucb1_router: Optional[UCB1ModelRouter] = None
+
+
+def get_ucb1_router() -> UCB1ModelRouter:
+    global _ucb1_router
+    if _ucb1_router is None:
+        _ucb1_router = UCB1ModelRouter()
+    return _ucb1_router
 
 
 class ViralityAnalysis(BaseModel):
@@ -226,9 +244,27 @@ def _get_missing_llm_key_error(model_name: str) -> Optional[str]:
     return None
 
 
-def get_transcript_agent() -> Agent[None, TranscriptAnalysis]:
-    """Get or create the transcript analysis agent (lazy initialization)."""
+def get_transcript_agent(model_override: str | None = None) -> Agent[None, TranscriptAnalysis]:
+    """Get or create the transcript analysis agent (lazy initialization).
+
+    If model_override is provided (from UCB1 router), use that model instead of config.llm.
+    """
     global _transcript_agent
+    model = model_override or config.llm
+
+    # If a specific model is requested (UCB1 override), always create a fresh agent.
+    if model_override and model_override != config.llm:
+        config_error = _get_missing_llm_key_error(model_override)
+        if config_error:
+            logger.warning(f"UCB1 model {model_override} missing key, falling back to config LLM")
+            model = config.llm
+
+        return Agent[None, TranscriptAnalysis](
+            model=model,
+            result_type=TranscriptAnalysis,
+            system_prompt=transcript_analysis_system_prompt,
+        )
+
     if _transcript_agent is None:
         config_error = _get_missing_llm_key_error(config.llm)
         if config_error:
@@ -280,19 +316,39 @@ Transcript:
 async def get_most_relevant_parts_by_transcript(
     transcript: str, include_broll: bool = False
 ) -> TranscriptAnalysis:
-    """Get the most relevant parts of a transcript with virality scoring and optional B-roll detection."""
+    """Get the most relevant parts of a transcript with virality scoring and optional B-roll detection.
+
+    Uses H2E content intelligence to adjust scoring weights per content type,
+    and UCB1 multi-arm bandit to route to the best-performing LLM model.
+    """
     logger.info(
         f"Starting AI analysis of transcript ({len(transcript)} chars), include_broll={include_broll}"
     )
 
     try:
-        agent = get_transcript_agent()
+        # H2E: classify intent and compute adjusted prompt
+        intent_data = classify_video_intent(transcript)
+        weights = get_scoring_weights(intent_data["intent"])
 
-        result = await agent.run(
-            build_transcript_analysis_prompt(
-                transcript=transcript, include_broll=include_broll
-            )
-        )
+        # UCB1: pick best model based on historical performance
+        ucb1 = get_ucb1_router()
+        selected_model = await ucb1.select_model()
+
+        # Try to get an agent for UCB1-selected model, fall back gracefully
+        try:
+            agent = get_transcript_agent(model_override=selected_model)
+        except Exception as e:
+            logger.warning(f"Could not load UCB1 model {selected_model}: {e}. Using config LLM.")
+            await ucb1.record_error(selected_model)
+            selected_model = config.llm
+            agent = get_transcript_agent()
+
+        # Build prompt with H2E weight adjustments injected
+        base_prompt = build_transcript_analysis_prompt(transcript=transcript, include_broll=include_broll)
+        adjusted_prompt = adjust_prompt_for_intent(base_prompt, weights, intent_data)
+
+        t0 = time.monotonic()
+        result = await agent.run(adjusted_prompt)
 
         analysis = result.data
         logger.info(
@@ -388,14 +444,27 @@ async def get_most_relevant_parts_by_transcript(
         logger.info(f"Selected {len(validated_segments)} segments for processing")
         if validated_segments:
             top = validated_segments[0]
+            top_virality = top.virality.total_score if top.virality else 0
             logger.info(
-                f"Top segment - relevance: {top.relevance_score:.2f}, virality: {top.virality.total_score if top.virality else 'N/A'}"
+                f"Top segment - relevance: {top.relevance_score:.2f}, virality: {top_virality}"
             )
+            # UCB1: record reward = normalized avg virality of selected clips (0–1 range)
+            latency_ms = (time.monotonic() - t0) * 1000
+            avg_virality = sum(
+                (s.virality.total_score if s.virality else 0) for s in validated_segments
+            ) / max(len(validated_segments), 1)
+            reward = avg_virality / 100.0  # normalize to 0-1
+            await ucb1.record_reward(selected_model, reward, latency_ms)
 
         return final_analysis
 
     except Exception as e:
         logger.error(f"Error in transcript analysis: {e}")
+        # Record UCB1 error so the circuit breaker can kick in if this model keeps failing
+        try:
+            await ucb1.record_error(selected_model)
+        except Exception:
+            pass
         raise RuntimeError(f"Transcript analysis failed: {str(e)}") from e
 
 

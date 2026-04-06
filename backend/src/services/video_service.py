@@ -4,6 +4,7 @@ Video service - handles video processing business logic.
 
 from pathlib import Path
 from typing import List, Dict, Any, Optional, Callable, Awaitable
+import asyncio
 import logging
 import json
 import subprocess
@@ -23,6 +24,10 @@ from ..video_utils import (
 )
 from ..ai import get_most_relevant_parts_by_transcript
 from ..config import Config
+from ..vision.frame_extractor import extract_key_frames
+from ..vision.frame_analyzer import analyze_frames_batch
+from ..editing.audio_enhance import enhance_audio
+from ..editing.color_grade import apply_color_grade
 
 logger = logging.getLogger(__name__)
 config = Config()
@@ -225,6 +230,42 @@ class VideoService:
             return None
 
     @staticmethod
+    async def post_process_clip(clip_info: Dict[str, Any]) -> Dict[str, Any]:
+        """Apply audio enhancement and color grading to a rendered clip.
+
+        Controlled by config flags:
+            enable_audio_enhance  → noise reduction + -14 LUFS normalization
+            default_color_grade   → one of: none, cinematic, bright, moody, vintage, clean
+        """
+        clip_path = Path(clip_info["path"])
+        if not clip_path.exists():
+            return clip_info
+
+        try:
+            if config.enable_audio_enhance:
+                enhanced = await run_in_thread(
+                    enhance_audio, clip_path, True, True, config.target_lufs
+                )
+                if enhanced != clip_path and enhanced.exists():
+                    clip_path = enhanced
+                    clip_info["path"] = str(enhanced)
+                    clip_info["filename"] = enhanced.name
+
+            if config.default_color_grade and config.default_color_grade != "none":
+                graded = await run_in_thread(
+                    apply_color_grade, clip_path, config.default_color_grade
+                )
+                if graded != clip_path and graded.exists():
+                    clip_path = graded
+                    clip_info["path"] = str(graded)
+                    clip_info["filename"] = graded.name
+
+        except Exception as e:
+            logger.warning(f"Post-processing skipped for {clip_info['filename']}: {e}")
+
+        return clip_info
+
+    @staticmethod
     async def apply_single_transition(
         prev_clip_path: Path,
         current_clip_info: Dict[str, Any],
@@ -307,6 +348,19 @@ class VideoService:
                     f"Maximum allowed duration is {mins} minutes."
                 )
 
+            # Step 1.5: Vision frame analysis (runs parallel with transcript if enabled)
+            vision_task = None
+            if config.enable_vision_analysis:
+                async def _run_vision():
+                    try:
+                        frames = await run_in_thread(extract_key_frames, video_path)
+                        if frames:
+                            return await analyze_frames_batch(frames)
+                    except Exception as ve:
+                        logger.warning(f"Vision analysis skipped: {ve}")
+                    return None
+                vision_task = asyncio.create_task(_run_vision())
+
             # Step 2: Generate transcript
             if should_cancel and await should_cancel():
                 raise Exception("Task cancelled")
@@ -319,6 +373,19 @@ class VideoService:
                 transcript = await VideoService.generate_transcript(
                     video_path, processing_mode=processing_mode
                 )
+
+            # Collect vision results if they finished
+            visual_analysis = None
+            if vision_task is not None:
+                try:
+                    visual_analysis = await vision_task
+                    if visual_analysis:
+                        logger.info(
+                            f"Vision analysis: {len(visual_analysis.energy_peaks)} energy peaks, "
+                            f"{len(visual_analysis.hook_frames)} hook frames"
+                        )
+                except Exception as ve:
+                    logger.warning(f"Vision task failed: {ve}")
 
             # Step 3: AI analysis
             if should_cancel and await should_cancel():
